@@ -1,0 +1,59 @@
+name: Weekly upstream sync
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve upstream parent repository
+        id: repo
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            if (!data.parent) {
+              core.notice("Repository is not a fork; skipping upstream sync.");
+              core.setOutput("has_parent", "false");
+              core.setOutput("default_branch", data.default_branch);
+              return;
+            }
+            core.setOutput("has_parent", "true");
+            core.setOutput("parent_full_name", data.parent.full_name);
+            core.setOutput("default_branch", data.default_branch);
+
+      - name: Sync working tree with upstream default branch
+        if: steps.repo.outputs.has_parent == 'true'
+        run: |
+          git remote add upstream "https://github.com/${{ steps.repo.outputs.parent_full_name }}.git"
+          git fetch upstream "${{ steps.repo.outputs.default_branch }}"
+          git checkout "${{ steps.repo.outputs.default_branch }}"
+          git reset --hard "upstream/${{ steps.repo.outputs.default_branch }}"
+
+      - name: Create pull request with upstream changes
+        if: steps.repo.outputs.has_parent == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: chore/weekly-upstream-sync
+          base: ${{ steps.repo.outputs.default_branch }}
+          commit-message: "chore: sync with upstream"
+          title: "chore: sync upstream changes"
+          body: |
+            Automated weekly synchronization with upstream default branch.
+          delete-branch: true
